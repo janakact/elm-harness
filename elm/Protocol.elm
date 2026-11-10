@@ -13,7 +13,9 @@ action =
     in
     str "type" |> D.andThen (\tag ->
         case tag of
-            "NewChat" -> D.map3 Core.NewChat (str "title") (str "model") at
+            "NewChat" -> D.map4 Core.NewChatIn (D.oneOf [ str "workspace", D.succeed "" ]) (str "title") (str "model") at
+            "Rename" -> D.map2 Core.RenameThread (str "threadId") (str "title")
+            "StopThread" -> D.map Core.StopThread (str "threadId")
             "Submit" -> D.map3 Core.Submit (str "threadId") (str "text") at
             "Fork" -> D.map4 Core.Fork (str "nodeId") (str "title") (str "task") at
             "Send" -> D.map5 Core.Send (str "from") (str "target") (str "text") (D.field "refs" (D.list D.string)) at

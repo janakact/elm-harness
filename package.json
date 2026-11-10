@@ -6,7 +6,7 @@
   "scripts": {
     "build": "mkdir -p dist && ELM_HOME=$PWD/.elm-home elm make elm/Server/Main.elm --output=dist/server.js && mv dist/server.js dist/server.cjs && ELM_HOME=$PWD/.elm-home elm make elm/Main.elm --output=dist/browser.js && ELM_HOME=$PWD/.elm-home elm make elm/Terminal/Main.elm --output=dist/terminal.js && mv dist/terminal.js dist/terminal.cjs",
     "start": "npm run build && node host/server.mjs",
-    "tui": "node host/terminal.mjs",
+    "tui": "npm run build && node host/terminal.mjs",
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "devDependencies": {

@@ -6,15 +6,20 @@ import Json.Decode as D
 import Json.Encode as E
 
 type alias Node = { id : String, parentId : Maybe String, refs : List String, threadId : String, actor : String, kind : String, text : String, at : String }
-type alias Thread = { id : String, head : String, forkedFrom : Maybe String, title : String, model : String }
+type alias Thread = { id : String, head : String, forkedFrom : Maybe String, title : String, model : String, workspace : String }
 type alias Call = { id : String, name : String, arguments : String }
 type alias Run = { id : String, threadId : String, status : String, requestId : String, draft : String, calls : Dict Int Call, pending : List String, steps : Int }
 type alias Pending = { kind : String, text : String, refs : List String, at : String }
-type alias Model = { nodes : Dict String Node, threads : Dict String Thread, runs : Dict String Run, inbox : Dict String (List Pending), seq : Int, revision : Int, focused : String, selected : String, filter : String, maxConcurrent : Int, systemPrompt : String }
+type alias Model = { nodes : Dict String Node, threads : Dict String Thread, runs : Dict String Run, inbox : Dict String (List Pending), seq : Int, revision : Int, focused : String, selected : String, filter : String, maxConcurrent : Int, systemPrompt : String, defaultWorkspace : String, workspaces : Dict String String }
 
 type Msg
     = Submit String String String
     | NewChat String String String
+    | NewChatIn String String String String
+    | RenameThread String String
+    | StopThread String
+    | BindWorkspace String String
+    | RegisterWorkspace String String
     | Select String
     | Focus String
     | Fork String String String String
@@ -40,9 +45,9 @@ init : Model
 init =
     let
         startNode = { id = "n1", parentId = Nothing, refs = [], threadId = "t1", actor = "System", kind = "Notice", text = "Session started", at = "" }
-        thread = { id = "t1", head = "n1", forkedFrom = Nothing, title = "Main", model = "deepseek/deepseek-v4-flash" }
+        thread = { id = "t1", head = "n1", forkedFrom = Nothing, title = "Main", model = "deepseek/deepseek-v4-flash", workspace = "" }
     in
-    { nodes = Dict.singleton "n1" startNode, threads = Dict.singleton "t1" thread, runs = Dict.empty, inbox = Dict.empty, seq = 1, revision = 0, focused = "t1", selected = "n1", filter = "all", maxConcurrent = 4, systemPrompt = "" }
+    { nodes = Dict.singleton "n1" startNode, threads = Dict.singleton "t1" thread, runs = Dict.empty, inbox = Dict.empty, seq = 1, revision = 0, focused = "t1", selected = "n1", filter = "all", maxConcurrent = 4, systemPrompt = "", defaultWorkspace = "", workspaces = Dict.empty }
 
 busy : String -> Model -> Bool
 busy threadId model = Dict.values model.runs |> List.any (\r -> r.threadId == threadId && List.member r.status [ "Queued", "RequestingModel", "Streaming", "ExecutingTool", "AwaitingApproval" ])
@@ -116,7 +121,7 @@ context model thread =
                 "ToolCall" -> D.decodeString D.value n.text |> Result.toMaybe |> Maybe.map (\calls -> E.object [ ( "role", E.string "assistant" ), ( "content", E.null ), ( "tool_calls", calls ) ])
                 "ToolResult" -> D.decodeString D.value n.text |> Result.toMaybe
                 _ -> if List.member n.kind [ "UserMessage", "AgentMessage", "Handoff", "Summary" ] then Just (E.object [ ( "role", E.string (if n.kind == "AgentMessage" then "assistant" else "user") ), ( "content", E.string n.text ) ]) else Nothing
-    in E.list identity (E.object [ ( "role", E.string "system" ), ( "content", E.string model.systemPrompt ) ] :: List.filterMap message relevant)
+    in E.list identity (E.object [ ( "role", E.string "system" ), ( "content", E.string (Dict.get thread.workspace model.workspaces |> Maybe.withDefault model.systemPrompt) ) ] :: List.filterMap message relevant)
 
 takeUntilPrompt : List Node -> List Node
 takeUntilPrompt nodes =
@@ -141,7 +146,7 @@ start threadId model =
                 let ( limited, _ ) = commit threadId "System" "Notice" "Tool turn budget reached (25). Send a new instruction to continue." [] "" model in ( limited, [] )
             else
                 let
-                    ( traced, _ ) = commit threadId "System" "Activity" ("Model request · prompt v3\nSources: SYSTEM.md (override if present), APPEND_SYSTEM.md, AGENTS.md\n" ++ model.systemPrompt) [] "" model
+                    ( traced, _ ) = commit threadId "System" "Activity" ("Model request · prompt v3\nSources: SYSTEM.md (override if present), APPEND_SYSTEM.md, AGENTS.md\n" ++ (Dict.get thread.workspace model.workspaces |> Maybe.withDefault model.systemPrompt)) [] "" model
                     ( runId, m1 ) = next "r" traced
                     ( requestId, m2 ) = next "q" m1
                     run = { id = runId, threadId = threadId, status = "RequestingModel", requestId = requestId, draft = "", calls = Dict.empty, pending = [], steps = 0 }
@@ -166,12 +171,24 @@ schedule model =
 update : Msg -> Model -> ( Model, List Effect, Maybe String )
 update msg model =
     case msg of
-        NewChat title modelName at ->
+        BindWorkspace root prompt ->
+            ( { model | defaultWorkspace = root, systemPrompt = prompt, workspaces = Dict.insert root prompt model.workspaces, threads = Dict.map (\_ thread -> if String.isEmpty thread.workspace then { thread | workspace = root } else thread) model.threads }, [], Nothing )
+        RegisterWorkspace root prompt -> ( { model | workspaces = Dict.insert root prompt model.workspaces, revision = model.revision + 1 }, [], Nothing )
+        RenameThread threadId title ->
+            if String.isEmpty (String.trim title) then ( model, [], Nothing ) else
+                ( { model | threads = Dict.update threadId (Maybe.map (\thread -> { thread | title = String.trim title })) model.threads, revision = model.revision + 1 }, [], Nothing )
+        StopThread threadId ->
+            let
+                stop run ( current, effects ) = let ( updated, emitted, _ ) = update (Cancel run.id) current in ( updated, effects ++ emitted )
+                ( stopped, commands ) = Dict.values model.runs |> List.filter (\r -> r.threadId == threadId && List.member r.status [ "Queued", "RequestingModel", "Streaming", "ExecutingTool", "AwaitingApproval" ]) |> List.foldl stop ( model, [] )
+            in ( stopped, commands, Nothing )
+        NewChat title modelName at -> update (NewChatIn model.defaultWorkspace title modelName at) model
+        NewChatIn requestedWorkspace title modelName at ->
             let
                 ( threadId, m1 ) = next "t" model
                 ( nodeId, m2 ) = next "n" m1
                 node = { id = nodeId, parentId = Nothing, refs = [], threadId = threadId, actor = "System", kind = "Notice", text = "Session started", at = at }
-                thread = { id = threadId, head = nodeId, forkedFrom = Nothing, title = if String.isEmpty (String.trim title) then "Chat " ++ String.fromInt (Dict.size model.threads + 1) else String.trim title, model = if String.isEmpty (String.trim modelName) then "deepseek/deepseek-v4-flash" else String.trim modelName }
+                thread = { id = threadId, head = nodeId, forkedFrom = Nothing, title = if String.isEmpty (String.trim title) then "Chat " ++ String.fromInt (Dict.size model.threads + 1) else String.trim title, model = if String.isEmpty (String.trim modelName) then "deepseek/deepseek-v4-flash" else String.trim modelName, workspace = if String.isEmpty requestedWorkspace then model.defaultWorkspace else requestedWorkspace }
             in
             ( { m2 | nodes = Dict.insert nodeId node m2.nodes, threads = Dict.insert threadId thread m2.threads, selected = nodeId, focused = threadId, revision = m2.revision + 1 }, [], Just "Notice" )
         Submit threadId text at ->
@@ -191,7 +208,7 @@ update msg model =
                     let
                         ( threadId, m1 ) = next "t" model
                         sourceModel = Dict.get source.threadId model.threads |> Maybe.map .model |> Maybe.withDefault "deepseek/deepseek-v4-flash"
-                        thread = { id = threadId, head = nodeId, forkedFrom = Just nodeId, title = if String.isEmpty (String.trim title) then threadId else title, model = sourceModel }
+                        thread = { id = threadId, head = nodeId, forkedFrom = Just nodeId, title = if String.isEmpty (String.trim title) then threadId else title, model = sourceModel, workspace = Dict.get source.threadId model.threads |> Maybe.map .workspace |> Maybe.withDefault model.defaultWorkspace }
                         m2 = { m1 | threads = Dict.insert threadId thread m1.threads, focused = threadId, selected = nodeId, revision = m1.revision + 1 }
                     in
                     if String.isEmpty (String.trim task) then ( m2, [], Nothing ) else update (Submit threadId task at) m2
@@ -303,7 +320,7 @@ view model =
     let
         selected = Dict.get model.selected model.nodes
         nodeItem n = E.object [ ( "id", E.string n.id ), ( "parentId", maybeString n.parentId ), ( "threadId", E.string n.threadId ), ( "kind", E.string n.kind ), ( "actor", E.string n.actor ), ( "preview", E.string (String.left 90 (String.lines n.text |> List.head |> Maybe.withDefault "")) ), ( "text", E.string n.text ), ( "at", E.string n.at ), ( "refs", E.list E.string n.refs ) ]
-        threadItem t = E.object [ ( "id", E.string t.id ), ( "title", E.string t.title ), ( "head", E.string t.head ), ( "forkedFrom", maybeString t.forkedFrom ), ( "model", E.string t.model ), ( "status", E.string (Dict.values model.runs |> List.sortBy (\r -> String.dropLeft 1 r.id |> String.toInt |> Maybe.withDefault 0) |> List.filter (\r -> r.threadId == t.id) |> List.reverse |> List.head |> Maybe.map .status |> Maybe.withDefault "Idle") ) ]
+        threadItem t = E.object [ ( "id", E.string t.id ), ( "title", E.string t.title ), ( "head", E.string t.head ), ( "forkedFrom", maybeString t.forkedFrom ), ( "model", E.string t.model ), ( "workspace", E.string t.workspace ), ( "status", E.string (Dict.values model.runs |> List.sortBy (\r -> String.dropLeft 1 r.id |> String.toInt |> Maybe.withDefault 0) |> List.filter (\r -> r.threadId == t.id) |> List.reverse |> List.head |> Maybe.map .status |> Maybe.withDefault "Idle") ) ]
     in
     E.object [ ( "type", E.string "Column" ), ( "focused", E.string model.focused ), ( "filter", E.string model.filter )
     , ( "sidebar", E.object [ ( "type", E.string "AgentSidebar" ), ( "items", E.list threadItem (Dict.values model.threads) ) ] )
@@ -324,22 +341,23 @@ maybeString value = Maybe.map E.string value |> Maybe.withDefault E.null
 
 encode : Model -> E.Value
 encode model =
-    E.object [ ( "interrupted", E.list E.string (Dict.values model.runs |> List.filter (\r -> List.member r.status [ "RequestingModel", "Streaming", "ExecutingTool", "AwaitingApproval" ]) |> List.map .threadId) ), ( "systemPrompt", E.string model.systemPrompt ), ( "schemaVersion", E.int 1 ), ( "seq", E.int model.seq ), ( "revision", E.int model.revision ), ( "focused", E.string model.focused ), ( "selected", E.string model.selected ), ( "filter", E.string model.filter )
+    E.object [ ( "interrupted", E.list E.string (Dict.values model.runs |> List.filter (\r -> List.member r.status [ "RequestingModel", "Streaming", "ExecutingTool", "AwaitingApproval" ]) |> List.map .threadId) ), ( "defaultWorkspace", E.string model.defaultWorkspace ), ( "workspaces", E.dict identity E.string model.workspaces ), ( "systemPrompt", E.string model.systemPrompt ), ( "schemaVersion", E.int 1 ), ( "seq", E.int model.seq ), ( "revision", E.int model.revision ), ( "focused", E.string model.focused ), ( "selected", E.string model.selected ), ( "filter", E.string model.filter )
     , ( "nodes", E.list (\n -> E.object [ ( "id", E.string n.id ), ( "parentId", maybeString n.parentId ), ( "refs", E.list E.string n.refs ), ( "threadId", E.string n.threadId ), ( "actor", E.string n.actor ), ( "kind", E.string n.kind ), ( "text", E.string n.text ), ( "at", E.string n.at ) ]) (Dict.values model.nodes) )
-    , ( "threads", E.list (\t -> E.object [ ( "id", E.string t.id ), ( "head", E.string t.head ), ( "forkedFrom", maybeString t.forkedFrom ), ( "title", E.string t.title ), ( "model", E.string t.model ) ]) (Dict.values model.threads) )
+    , ( "threads", E.list (\t -> E.object [ ( "id", E.string t.id ), ( "head", E.string t.head ), ( "forkedFrom", maybeString t.forkedFrom ), ( "title", E.string t.title ), ( "model", E.string t.model ), ( "workspace", E.string t.workspace ) ]) (Dict.values model.threads) )
     , ( "inbox", E.object (Dict.toList model.inbox |> List.map (\( id, items ) -> ( id, E.list (\p -> E.object [ ( "kind", E.string p.kind ), ( "text", E.string p.text ), ( "refs", E.list E.string p.refs ), ( "at", E.string p.at ) ]) items ) )) ) ]
 
 nodeDecoder : D.Decoder Node
 nodeDecoder = D.map7 Node (D.field "id" D.string) (D.field "parentId" (D.nullable D.string)) (D.field "refs" (D.list D.string)) (D.field "threadId" D.string) (D.field "actor" D.string) (D.field "kind" D.string) (D.field "text" D.string) |> D.andThen (\partial -> D.field "at" D.string |> D.map partial)
 
 threadDecoder : D.Decoder Thread
-threadDecoder = D.map5 Thread (D.field "id" D.string) (D.field "head" D.string) (D.field "forkedFrom" (D.nullable D.string)) (D.field "title" D.string) (D.field "model" D.string)
+threadDecoder = D.map6 Thread (D.field "id" D.string) (D.field "head" D.string) (D.field "forkedFrom" (D.nullable D.string)) (D.field "title" D.string) (D.field "model" D.string) (D.oneOf [ D.field "workspace" D.string, D.succeed "" ])
 
 decoder : D.Decoder Model
 decoder =
-    D.map8 (\seq revision focused selected filter nodes threads inbox -> { nodes = Dict.fromList (List.map (\n -> ( n.id, n )) nodes), threads = Dict.fromList (List.map (\t -> ( t.id, t )) threads), runs = Dict.empty, maxConcurrent = 4, systemPrompt = "", inbox = inbox, seq = seq, revision = revision, focused = focused, selected = selected, filter = filter })
+    D.map8 (\seq revision focused selected filter nodes threads inbox -> { nodes = Dict.fromList (List.map (\n -> ( n.id, n )) nodes), threads = Dict.fromList (List.map (\t -> ( t.id, t )) threads), runs = Dict.empty, maxConcurrent = 4, systemPrompt = "", defaultWorkspace = "", workspaces = Dict.empty, inbox = inbox, seq = seq, revision = revision, focused = focused, selected = selected, filter = filter })
         (D.field "seq" D.int) (D.field "revision" D.int) (D.field "focused" D.string) (D.field "selected" D.string) (D.field "filter" D.string) (D.field "nodes" (D.list nodeDecoder)) (D.field "threads" (D.list threadDecoder))
         (D.field "inbox" (D.dict (D.list (D.map4 Pending (D.field "kind" D.string) (D.field "text" D.string) (D.field "refs" (D.list D.string)) (D.field "at" D.string)))) |> D.maybe |> D.map (Maybe.withDefault Dict.empty))
+        |> D.andThen (\model -> D.map2 (\root workspaces -> { model | defaultWorkspace = root, workspaces = workspaces }) (D.oneOf [ D.field "defaultWorkspace" D.string, D.succeed "" ]) (D.oneOf [ D.field "workspaces" (D.dict D.string), D.succeed Dict.empty ]))
         |> D.andThen (\model ->
             D.map2 (\nodes threads -> List.length nodes == Dict.size model.nodes && List.length threads == Dict.size model.threads)
                 (D.field "nodes" (D.list nodeDecoder)) (D.field "threads" (D.list threadDecoder))

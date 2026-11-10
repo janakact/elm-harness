@@ -13,7 +13,26 @@ npm start
 
 Open **http://127.0.0.1:8787**. The host loads `OPENROUTER_API_KEY` from `.env` or the environment; clients never receive it. The default model is `deepseek/deepseek-v4-flash`. Settings changes the selected thread's model and shows the effective system prompt.
 
-In another terminal, run `npm run tui` for the interactive terminal client. Plain text sends a prompt; `/select NODE`, `/focus THREAD`, `/fork NAME`, `/model MODEL`, `/approve CALL`, `/deny CALL`, `/cancel RUN`, `/send THREAD MESSAGE`, and `/compact SUMMARY` operate through the same canonical Elm worker. The terminal must connect to the running server.
+Run `npm run tui` in a terminal for the full-screen interface. It compiles Elm, connects to the backend if it is already running, or starts a local backend automatically. A backend started by the TUI stops when you quit; an existing backend stays running. `HARNESS_URL` connects to a separately managed server without starting one.
+
+The TUI has a fixed composer, scrollable conversation and selected-message inspector. Wide terminals show chat and compact history sidebars; narrow terminals show the selected pane. History contains only the current chat and uses Chat/Tool labels. Incoming streams preserve draft text and the selected history node.
+
+| Key | Action |
+| --- | --- |
+| Tab | Switch panes |
+| F2 / F3 / F4 | Chats / history / composer |
+| ↑ / ↓ | Navigate the active list or scroll conversation |
+| Enter in history | Inspect the complete selected message/tool output |
+| PageUp / PageDown | Scroll conversation or inspector |
+| Esc | Return to conversation and composer |
+| Enter / Alt+Enter | Send / insert a line break |
+| Ctrl+N | New chat |
+| F5, then y / n | Review pending tool arguments, allow once / deny |
+| Ctrl+R / Ctrl+X | Resume / stop current run |
+| F1 | Keyboard help |
+| Ctrl+C / Ctrl+Q | Quit and restore the terminal |
+
+Bracketed paste inserts multiline content without sending it. Left/right, Home/End, Backspace/Delete, Ctrl+U and Ctrl+K edit the composer. Slash commands remain available: `/new`, `/fork NAME`, `/model MODEL`, `/send THREAD MESSAGE`, `/compact SUMMARY`, `/focus THREAD`, `/select NODE`, `/approve CALL`, `/deny CALL`, `/cancel RUN`, `/help`, `/quit`. All mutations go through the same canonical Elm worker.
 
 ## Coding workflow
 
@@ -44,7 +63,7 @@ Environment options: `PORT` (8787), `HARNESS_ROOT` (current directory), `HARNESS
 - `elm/Core.elm`: pure graph, context, agent loop, inbox and scheduling.
 - `elm/Server/Main.elm`: canonical Elm composition, ports and persistence decisions.
 - `elm/Prompt.elm`, `elm/Protocol.elm`: schemas, prompts and protocol/migrations.
-- `elm/Main.elm`, `elm/Terminal/Main.elm`, `elm/Rich.elm`: clients and shared rich-content semantics.
+- `elm/Main.elm`, `elm/Terminal/Main.elm`, `elm/Terminal/Screen.elm`, `elm/Rich.elm`: clients and shared rich-content semantics.
 - `elm/User.elm`: user-owned state and event hook; retained across framework updates.
 - `host/*.mjs`: transport, storage, tools and terminal adapters.
 

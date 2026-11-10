@@ -13,7 +13,7 @@ Implemented:
 - Separate core/user schemas, additive user migration, invalid-version rejection, graph checks, atomic serialized saves/backups and interrupted-tool recovery without automatic replay.
 - Fixed viewport browser shell with scrolling chat, anchored composer, responsive sidebar, graph/detail panel, approvals, model settings, run/stop, branching and reference delivery.
 - Elm Markdown/math tokenization, safe Markdown, tables, highlighted copyable code, local KaTeX leaf adapter, and terminal LaTeX fallback.
-- Interactive Elm terminal client with selection/focus/fork/send/approval/cancel/model/compact commands.
+- Full-screen Elm TUI with responsive chat/history panes, fixed editable composer, message inspection, scrolling, safe paste, permission review, keyboard shortcuts, and backend auto-start/cleanup. Terminal host handles raw keys, resize, ANSI writes and transport; Elm owns all interaction and layout semantics.
 
 Verification: npm test covers the actual compiled Elm worker, complete tool loop, approvals, cancellation, inbox recovery, namespace migration, concurrent scheduling, containment and atomic storage. A browser fixture checks Markdown/math/code and fixed viewport at desktop/mobile sizes. A live DeepSeek V4 Flash request read package.json through the real host and completed its answer.
 
