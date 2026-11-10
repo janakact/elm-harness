@@ -1,0 +1,10 @@
+.env
+workspace.json
+workspace.json.bak
+workspace.json.tmp
+.elm-home/
+.cargo-home/
+elm-stuff/
+host/target/
+dist/
+node_modules/
