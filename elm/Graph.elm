@@ -1,16 +1,16 @@
 module Graph exposing (view, label)
 
-import Core
+import App.Public as Public
 import Dict
 import Html exposing (Html)
 import Svg exposing (circle, g, line, svg, text, text_)
 import Svg.Attributes as A
 import Svg.Events
 
-view : Core.Model -> String -> (String -> msg) -> Html msg
+view : Public.Model -> String -> (String -> msg) -> Html msg
 view model selected select =
     let
-        nodes = Core.visibleNodes model
+        nodes = Public.visibleNodes model
         positions = nodes |> List.indexedMap (\i n -> ( n.id, ( 18, 14 + i * 25 ) )) |> Dict.fromList
         coord n = Dict.get n.id positions |> Maybe.withDefault ( 18, 14 )
         edge node target dashed =
@@ -23,7 +23,7 @@ view model selected select =
         edges = nodes |> List.concatMap (\node -> (Maybe.map (\parent -> edge node parent False) node.parentId |> Maybe.map List.singleton |> Maybe.withDefault []) ++ List.map (\ref -> edge node ref True) node.refs)
     in svg [ A.width "100%", A.height (String.fromInt (List.length nodes * 25 + 4)) ] (edges ++ List.map draw nodes)
 
-label : Core.Node -> String
+label : Public.Node -> String
 label node =
     case node.kind of
         "UserMessage" -> "Chat · You"
@@ -34,5 +34,6 @@ label node =
         "Approval" -> "Approval"
         "Activity" -> "Activity"
         "Summary" -> "Summary"
+        "RunnerResult" -> "Agent job · Result"
         "Notice" -> "System"
         _ -> "Event"

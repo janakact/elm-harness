@@ -6,20 +6,29 @@ import { createRequire } from 'node:module';
 import { storage } from './storage.mjs';
 import { stream } from './openrouter.mjs';
 import { execute, workspacePath } from './tools.mjs';
+import {probeRunners,launchRunner,runnerHome} from './runners.mjs';
 const require=createRequire(import.meta.url);
 try{process.loadEnvFile('.env');}catch(e){if(e.code!=='ENOENT')throw e;}
 const root=await fs.realpath(process.env.HARNESS_ROOT||process.cwd());
 const store=storage(path.resolve(process.env.HARNESS_WORKSPACE||'workspace.json'));
 const optional=async file=>{try{return await fs.readFile(file,'utf8');}catch(e){if(e.code==='ENOENT')return '';throw e;}};
 const document=await store.read();
-const flags={document,root,maxConcurrency:Number(process.env.HARNESS_CONCURRENCY||4),system:await optional(path.join(root,'SYSTEM.md')),append:await optional(path.join(root,'APPEND_SYSTEM.md')),project:await optional(path.join(root,'AGENTS.md'))};
+const runnerCapabilities=await probeRunners();
+const flags={document,root,runners:runnerCapabilities,startedAt:new Date().toISOString(),maxConcurrency:Number(process.env.HARNESS_CONCURRENCY||4),system:await optional(path.join(root,'SYSTEM.md')),append:await optional(path.join(root,'APPEND_SYSTEM.md')),project:await optional(path.join(root,'AGENTS.md'))};
 const app=require('../dist/server.cjs').Elm.Server.Main.init({flags});
 let lastPersist=-1;let snapshot=null;const controllers=new Map(),clients=new Set();let closing=false;
 let mutations=Promise.resolve();
 const authorizedRoots=new Set([root]);
+const toolPolicies=new Map();
+function updatePolicy(threadId,revision,policy){const old=toolPolicies.get(threadId);if(!old||revision>=old.revision)toolPolicies.set(threadId,{revision,policy});}
 const send=event=>{if(!closing)app.ports.incoming.send({...event,at:new Date().toISOString()});};
 app.ports.outgoing.subscribe(async command=>{
   try{
+    if(command.type==='ToolPolicy'){
+      updatePolicy(command.threadId,command.revision,command.policy);
+      const policy=toolPolicies.get(command.threadId).policy;
+      for(const controller of controllers.values())if(controller.toolName&&controller.threadId===command.threadId&&policy[controller.toolName]==='deny')controller.abort();
+    }
     if(command.type==='ReadWorkspace'){
       try{
         const requested=command.path==='~'?os.homedir():command.path.startsWith('~/')?path.join(os.homedir(),command.path.slice(2)):path.resolve(root,command.path);
@@ -28,18 +37,33 @@ app.ports.outgoing.subscribe(async command=>{
         const context={system:await source('SYSTEM.md'),append:await source('APPEND_SYSTEM.md'),project:await source('AGENTS.md')};authorizedRoots.add(canonical);send({type:'WorkspaceLoaded',requestId:command.requestId,root:canonical,...context});
       }catch(error){send({type:'WorkspaceFailed',requestId:command.requestId,error:error.message});}
     }
+    if(command.type==='ActionResult'&&command.clientId){for(const client of clients)client.write(`event: action-result\ndata: ${JSON.stringify(command)}\n\n`);}
     if(command.type==='Snapshot'){snapshot=command.data;for(const client of clients)client.write(`data: ${JSON.stringify(snapshot)}\n\n`);}
-    if(command.type==='Persist'&&command.serial>lastPersist){lastPersist=command.serial;await store.write(command.document);}
+    if(command.type==='Persist'&&command.serial>lastPersist){lastPersist=command.serial;await store.write(command.document);send({type:"Saved",serial:command.serial});}
     if(command.type==='Abort'){controllers.get(command.requestId)?.abort();for(const controller of controllers.values())if(controller.threadId===command.requestId||controller.id===command.requestId)controller.abort();}
+    if(command.type==='StopRunner')controllers.get(`runner:${command.jobId}:${command.attempt}`)?.abort();
+    if(command.type==='LaunchRunner'){
+      const key=`runner:${command.jobId}:${command.attempt}`;
+      if(controllers.has(key))return;
+      const controller=new AbortController();controllers.set(key,controller);
+      try{
+        if(!authorizedRoots.has(command.root))throw Error('Workspace has not been opened');
+        if(!runnerCapabilities[command.backend]?.available)throw Error(runnerCapabilities[command.backend]?.error||'Runner unavailable');
+        await launchRunner(command,{home:runnerHome(process.env.HARNESS_WORKSPACE||'workspace.json'),signal:controller.signal,onFrame:(sequence,data)=>send({type:'RunnerFrame',jobId:command.jobId,attempt:command.attempt,sequence,data})});
+        send({type:'RunnerExit',jobId:command.jobId,attempt:command.attempt,ok:true,error:''});
+      }catch(error){send({type:'RunnerExit',jobId:command.jobId,attempt:command.attempt,ok:false,error:error.message});}finally{controllers.delete(key);}
+    }
     if(command.type==='Request'){
       const controller=new AbortController();controller.id=command.requestId;controller.threadId=command.threadId;controllers.set(command.requestId,controller);
       try{await stream(command.body,process.env.OPENROUTER_API_KEY,AbortSignal.any([controller.signal,AbortSignal.timeout(180000)]),data=>send({type:'Chunk',requestId:command.requestId,data}));send({type:'Finished',requestId:command.requestId});}catch(e){send({type:'Failed',requestId:command.requestId,error:e.message});}finally{controllers.delete(command.requestId);}
     }
     if(command.type==='Execute'){
       const toolRoot=command.root||root;
-      if(!authorizedRoots.has(toolRoot)){send({type:'ToolFinished',callId:command.callId,text:'Workspace has not been opened',ok:false});return;}
-      const controller=new AbortController();controllers.set(command.callId,controller);
-      try{send({type:'ToolFinished',callId:command.callId,text:await (command.name==='read'?execute(toolRoot,command,controller.signal):(mutations=mutations.catch(()=>{}).then(()=>execute(toolRoot,command,controller.signal)))),ok:true});}catch(e){send({type:'ToolFinished',callId:command.callId,text:e.message,ok:false});}finally{controllers.delete(command.callId);}
+      if(!authorizedRoots.has(toolRoot)){send({type:'ToolFinished',runId:command.runId,threadId:command.threadId,callId:command.callId,text:'Workspace has not been opened',ok:false});return;}
+      updatePolicy(command.threadId,command.policyRevision,command.policy);
+      const controller=new AbortController();controller.threadId=command.threadId;controller.toolName=command.name;controllers.set(command.threadId+':tool:'+command.callId,controller);
+      const runTool=()=>execute(toolRoot,{...command,policy:toolPolicies.get(command.threadId)?.policy},controller.signal);
+      try{send({type:'ToolFinished',runId:command.runId,threadId:command.threadId,callId:command.callId,text:await (command.name==='read'?runTool():(mutations=mutations.catch(()=>{}).then(runTool))),ok:true});}catch(e){send({type:'ToolFinished',runId:command.runId,threadId:command.threadId,callId:command.callId,text:e.message,ok:false});}finally{if(controllers.get(command.threadId+':tool:'+command.callId)===controller)controllers.delete(command.threadId+':tool:'+command.callId);}
     }
   }catch(e){send({type:'StorageFailed',error:e.message});}
 });
@@ -53,7 +77,7 @@ const server=http.createServer(async(req,res)=>{
       if(req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`){res.writeHead(403).end();return;}
       let body='';for await(const chunk of req){body+=chunk;if(body.length>2_000_000)throw Error('Action too large');}
       const action=JSON.parse(body);if(action.protocolVersion!==1)throw Error('Unsupported protocol');
-      if(!['Submit','NewChat','Fork','Send','SetModel','Run','Cancel','Approve','Compact','ToggleCount','OpenWorkspace','Rename','StopThread'].includes(action.type))throw Error('Unknown client action');
+      if(!['Submit','NewChat','Fork','Send','SetModel','Run','Cancel','Approve','Compact','ToggleCount','OpenWorkspace','Rename','StopThread','SetPolicy','SetBudget','Summarize','ApplySummary','DiscardSummary','UserAction','StartJob','ResumeJob','CancelJob','ReportJob'].includes(action.type))throw Error('Unknown client action');
       send(action);res.writeHead(202).end('{}');return;
     }
     let file;

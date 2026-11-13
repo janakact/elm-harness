@@ -8,7 +8,7 @@ import {execute,workspacePath} from '../host/tools.mjs';
 import {storage} from '../host/storage.mjs';
 const Elm=createRequire(import.meta.url)('../dist/server.cjs').Elm;
 const delay=()=>new Promise(resolve=>setTimeout(resolve,20));
-async function worker(document=null){const app=Elm.Server.Main.init({flags:{document,root:'/workspace',system:'',append:'Test append',project:'Project rules'}});const events=[];app.ports.outgoing.subscribe(e=>events.push(e));await delay();return {events,send:async e=>{app.ports.incoming.send({...e,at:'test-time'});await delay();},snapshot:()=>events.filter(e=>e.type==='Snapshot').at(-1)?.data,request:()=>events.filter(e=>e.type==='Request').at(-1)};}
+async function worker(document=null){const app=Elm.Server.Main.init({flags:{document,root:'/workspace',system:'',append:'Test append',project:'Project rules'}});const events=[];app.ports.outgoing.subscribe(e=>{events.push(e);if(e.type==="Persist")queueMicrotask(()=>app.ports.incoming.send({type:"Saved",serial:e.serial}));});await delay();return {events,send:async e=>{app.ports.incoming.send({...e,at:'test-time'});await delay();},snapshot:()=>events.filter(e=>e.type==='Snapshot').at(-1)?.data,request:()=>events.filter(e=>e.type==='Request').at(-1)};}
 const chunk=(id,delta)=>({type:'Chunk',requestId:id,data:{choices:[{delta}]}});
 test('canonical Elm loop: streamed tools, approval, tool result context, completion, fork and captured delivery',async()=>{
  const w=await worker();assert.equal(w.snapshot().error,'');await w.send({type:'Submit',threadId:'t1',text:'Inspect code'});let req=w.request();assert.deepEqual(req.body.tools.map(t=>t.function.name),['read','write','bash']);assert.match(req.body.messages[0].content,/Project rules/);

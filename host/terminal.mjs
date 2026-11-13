@@ -45,7 +45,7 @@ app.ports.outgoing.subscribe(async command => {
   } else if (command.type === 'Quit') cleanup();
   else if (command.type === 'Action') {
     try {
-      const response = await fetch(base + '/api/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...command.data, protocolVersion: 1, clientId }), signal: transport.signal });
+      const response = await fetch(base + '/api/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...command.data, actionId:command.data.actionId||randomUUID(), protocolVersion: 1, clientId }), signal: transport.signal });
       if (!response.ok) throw Error(await response.text());
     } catch (error) { if (!closing) network(error.message); }
   }
@@ -63,7 +63,7 @@ process.stdin.on('keypress', (text, key = {}) => {
   if (key.ctrl && ['c', 'q'].includes(key.name)) { cleanup(); return; }
   if (key.ctrl && key.name === 'd') { cleanup(); return; }
   if (key.name === 'return' || key.name === 'enter') emit({ type: 'Key', key: key.meta || key.shift ? 'alt+return' : 'return' });
-  else if (key.ctrl || key.meta || ['up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', 'backspace', 'delete', 'escape', 'tab', 'f1', 'f2', 'f3', 'f4', 'f5'].includes(key.name)) emit({ type: 'Key', key: (key.ctrl ? 'ctrl+' : key.meta ? 'alt+' : '') + key.name });
+  else if (key.ctrl || key.meta || ['up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', 'backspace', 'delete', 'escape', 'tab', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7'].includes(key.name)) emit({ type: 'Key', key: (key.ctrl ? 'ctrl+' : key.meta ? 'alt+' : '') + key.name });
   else if (text) emit({ type: 'Text', text });
 });
 process.on('SIGINT', () => cleanup());
@@ -95,6 +95,7 @@ async function connect() {
         while ((end = buffer.indexOf('\n\n')) >= 0) {
           const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
           const data = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+          if(data&&frame.includes('event: action-result')){emit({type:'ActionResult',data:JSON.parse(data)});continue;}
           if (data) { queuedSnapshot = JSON.parse(data); if (!snapshotTimer) snapshotTimer = setTimeout(() => { snapshotTimer = null; emit({ type: 'Snapshot', data: queuedSnapshot }); }, 33); }
         }
       }

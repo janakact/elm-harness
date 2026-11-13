@@ -1,8 +1,9 @@
 module Commands exposing (Context, Intent(..), catalog, complete, parse, help)
 
 import Json.Encode as E
+import Policy
 
-type alias Context = { threadId : String, nodeId : String, modelName : String, workspace : String }
+type alias Context = { threadId : String, nodeId : String, modelName : String, workspace : String, policy : Policy.Model, summaryRequest : String }
 type Intent = Action E.Value | Workspace String Bool String | Local String String
 
 type alias Entry = { name : String, arguments : String, description : String }
@@ -19,10 +20,16 @@ catalog =
     , Entry "/resume" "" "Run the current chat again"
     , Entry "/fork" "[TITLE]" "Branch from the selected history node"
     , Entry "/send" "THREAD MESSAGE" "Deliver selected context to another chat"
-    , Entry "/compact" "SUMMARY" "Use an explicit summary for subsequent model context"
+    , Entry "/compact" "[apply|discard|SUMMARY]" "Generate and review a context summary, or supply your own"
+    , Entry "/permissions" "[read-only|ask|TOOL MODE]" "Show or change this chat’s tool permissions"
+    , Entry "/budget" "[TOKENS]" "Show or change the estimated input token budget"
+    , Entry "/usage" "" "Show provider-reported tokens and cost for this chat"
+    , Entry "/context" "" "Show estimated context size and input budget"
     , Entry "/history" "" "Open the current chat's history"
     , Entry "/prompt" "" "Show the effective system prompt for this workspace"
     , Entry "/status" "" "Show the current chat, workspace and model"
+    , Entry "/agents" "" "View read-only Codex and Claude jobs for this chat"
+    , Entry "/agent" "codex|claude [--model MODEL] PROMPT" "Start a read-only job; resume/cancel/report JOB manage it"
     , Entry "/help" "" "List commands and keyboard help"
     , Entry "/quit" "" "Exit the terminal"
     ]
@@ -75,12 +82,32 @@ parse context source =
             Just "/resume" -> action "Run" [ str "threadId" context.threadId ]
             Just "/run" -> action "Run" [ str "threadId" context.threadId ]
             Just "/fork" -> action "Fork" [ str "nodeId" context.nodeId, str "title" argument, str "task" "" ]
-            Just "/compact" -> required "Compact" argument [ str "threadId" context.threadId, str "text" argument ]
+            Just "/compact" -> case args of
+                [] -> action "Summarize" [ str "threadId" context.threadId ]
+                "preview" :: [] -> local "compaction" ""
+                "apply" :: replacement -> action "ApplySummary" [ str "threadId" context.threadId, str "requestId" context.summaryRequest, str "text" (String.join " " replacement) ]
+                "discard" :: [] -> action "DiscardSummary" [ str "threadId" context.threadId ]
+                _ -> required "Compact" argument [ str "threadId" context.threadId, str "text" argument ]
+            Just "/permissions" ->
+                let change policy = action "SetPolicy" [ str "threadId" context.threadId, ( "policy", Policy.encode policy ) ] in
+                case args of
+                    [] -> local "permissions" ""
+                    "read-only" :: [] -> change Policy.readOnly
+                    "ask" :: [] -> change Policy.ask
+                    tool :: mode :: [] -> case Policy.parseDecision mode |> Maybe.andThen (\decision -> Policy.change tool decision context.policy) of
+                        Just policy -> change policy
+                        Nothing -> Err "Use /permissions TOOL allow|ask|deny; tools are read, write, bash."
+                    _ -> Err "Use /permissions read-only, /permissions ask, or /permissions TOOL allow|ask|deny."
+            Just "/budget" -> if List.isEmpty args then local "context" "" else case String.toInt argument of
+                Just inputBudget -> if inputBudget >= 1000 && inputBudget <= 1000000 then action "SetBudget" [ str "threadId" context.threadId, ( "tokens", E.int inputBudget ) ] else Err "Budget must be 1,000–1,000,000 estimated input tokens."
+                Nothing -> Err "Use /budget TOKENS."
+            Just "/usage" -> local "usage" ""
+            Just "/context" -> local "context" ""
             Just "/send" -> case args of
                 target :: message -> if List.isEmpty message then Err "Use /send THREAD MESSAGE" else action "Send" [ str "from" context.threadId, str "target" target, str "text" (String.join " " message), ( "refs", E.list E.string [ context.nodeId ] ) ]
                 _ -> Err "Use /send THREAD MESSAGE"
-            Just "/approve" -> required "Approve" argument [ str "callId" argument, ( "allowed", E.bool True ) ]
-            Just "/deny" -> required "Approve" argument [ str "callId" argument, ( "allowed", E.bool False ) ]
+            Just "/approve" -> required "Approve" argument [ str "threadId" context.threadId, str "callId" argument, ( "allowed", E.bool True ) ]
+            Just "/deny" -> required "Approve" argument [ str "threadId" context.threadId, str "callId" argument, ( "allowed", E.bool False ) ]
             Just "/cancel" -> if String.isEmpty argument then action "StopThread" [ str "threadId" context.threadId ] else action "Cancel" [ str "runId" argument ]
             Just "/focus" -> local "focus" argument
             Just "/select" -> local "select" argument
@@ -89,6 +116,16 @@ parse context source =
             Just "/history" -> local "history" ""
             Just "/prompt" -> local "prompt" ""
             Just "/status" -> local "status" ""
+            Just "/agents" -> local "agents" ""
+            Just "/agent" -> case args of
+                "resume" :: id :: words -> if List.isEmpty words then Err "Use /agent resume JOB PROMPT" else action "ResumeJob" [ str "jobId" id, str "text" (String.join " " words) ]
+                "cancel" :: id :: [] -> action "CancelJob" [ str "jobId" id ]
+                "report" :: id :: [] -> action "ReportJob" [ str "jobId" id, str "target" context.threadId ]
+                "report" :: id :: target :: [] -> action "ReportJob" [ str "jobId" id, str "target" target ]
+                backend :: "--model" :: model :: words -> if List.member backend [ "codex", "claude" ] && not (List.isEmpty words) then action "StartJob" [ str "threadId" context.threadId, str "backend" backend, str "text" (String.join " " words), str "model" model ] else Err "Use /agent codex|claude --model MODEL PROMPT."
+                backend :: "--model" :: [] -> Err "Use /agent codex|claude --model MODEL PROMPT."
+                backend :: words -> if List.member backend [ "codex", "claude" ] && not (List.isEmpty words) then action "StartJob" [ str "threadId" context.threadId, str "backend" backend, str "text" (String.join " " words), str "model" "" ] else Err "Use /agent codex|claude PROMPT, or /agent resume|cancel|report JOB."
+                [] -> local "agents" ""
             Just "/help" -> local "help" ""
             Just "/quit" -> local "quit" ""
             _ -> Err "Unknown command. Type /help to see available commands.")

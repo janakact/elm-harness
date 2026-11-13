@@ -16,15 +16,15 @@ try{
  browser=await chromium.launch({executablePath:'/usr/bin/chromium',headless:true,args:['--no-sandbox']});
  const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(base);await page.waitForSelector('textarea:not([disabled])');
- await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await page.getByRole('button',{name:'Workspaces',exact:true}).click();
  const directory=page.getByRole('textbox',{name:'Workspace directory'});
  await directory.fill(path.join(fixture,'missing'));await page.getByRole('button',{name:'Open workspace',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.error')?.textContent.includes('ENOENT'));assert.equal(await page.locator('.workspace-title').textContent(),'Main');
  await directory.fill(second);await page.getByRole('button',{name:'New chat in workspace',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.workspace-title')?.textContent==='Chat 2');
- assert.ok((await page.locator('.composer-toolbar').textContent()).includes(second));await page.getByText('Effective system prompt · framework v3').click();assert.ok((await page.locator('.settings').textContent()).includes('SECOND WORKSPACE PROJECT RULES'));
+ assert.ok((await page.locator('.composer-toolbar').textContent()).includes(second));await page.getByRole('button',{name:'Chat settings',exact:true}).click();await page.getByText('Effective system prompt · framework v3').click();assert.ok((await page.locator('.settings').textContent()).includes('SECOND WORKSPACE PROJECT RULES'));await page.getByRole('button',{name:'Close chat settings',exact:true}).click();await page.getByRole('dialog',{name:'Chat settings',exact:true}).waitFor({state:'hidden'});
  async function command(text,title){await page.locator('textarea').fill(text);await page.getByRole('button',{name:'Send ↑',exact:true}).click();await page.waitForFunction(expected=>document.querySelector('.workspace-title')?.textContent===expected,title);}
  await command('/rename Workspace B','Workspace B');await command('/new Another B','Another B');
  let state=await(await fetch(base+'/api/state')).json();assert.equal(state.document.core.data.threads.filter(t=>t.workspace===second).length,2);assert.equal(state.document.core.data.threads.find(t=>t.id==='t1').workspace,first);
- await page.getByRole('button',{name:first,exact:true}).click();await page.waitForFunction(()=>document.querySelector('.workspace-title')?.textContent==='Main');assert.ok(!(await page.locator('.chat').textContent()).includes('SECOND WORKSPACE PROJECT RULES'));
+ await page.getByRole('button',{name:'Workspaces',exact:true}).click();await page.getByRole('button',{name:first,exact:true}).click();await page.waitForFunction(()=>document.querySelector('.workspace-title')?.textContent==='Main');assert.ok(!(await page.locator('.chat').textContent()).includes('SECOND WORKSPACE PROJECT RULES'));
  await command(`/workspace "${second}"`,'Another B');state=await(await fetch(base+'/api/state')).json();assert.equal(state.document.core.data.threads.length,3);
  await command(`/new --workspace "${third}" Fresh C`,'Fresh C');state=await(await fetch(base+'/api/state')).json();assert.equal(state.document.core.data.threads.find(t=>t.title==='Fresh C').workspace,third);
  await page.getByRole('button',{name:'Commands',exact:true}).click();assert.ok((await page.locator('.command-panel').textContent()).includes('/workspaces'));await page.locator('.command-item').filter({hasText:'/workspace [PATH]'}).click();await page.waitForFunction(()=>document.querySelector('textarea')?.value==='/workspace ');assert.equal(await page.locator('textarea').inputValue(),'/workspace ');

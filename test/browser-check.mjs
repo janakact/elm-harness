@@ -1,10 +1,11 @@
 import {chromium} from 'playwright-core';
 import assert from 'node:assert/strict';
+import {projectFixture} from './support/projection.mjs';
 const base=process.env.HARNESS_URL||'http://127.0.0.1:8788';
-const state=await (await fetch(base+'/api/state')).json();
+let state=await (await fetch(base+'/api/state')).json();
 state.document.core.data.nodes=[{id:'n1',parentId:null,refs:[],threadId:'t1',actor:'System',kind:'Notice',text:'Session started',at:''}];
 for(let i=2;i<35;i++)state.document.core.data.nodes.push({id:'n'+i,parentId:'n'+(i-1),refs:[],threadId:'t1',actor:i%2?'Agent':'User',kind:i%2?'AgentMessage':'UserMessage',text:i===33?'# Rich content\n\n**Strong** and a [link](https://example.com).\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n```js\nconst answer = 42;\n```\n\nInline \\(Q(s,a)\\) and display \\[V(s)=\\max_a Q(s,a)\\]\n\n<script>window.evil=true</script>':'A message in the conversation.\n\n'+('Long text to exercise the conversation viewport. '.repeat(10)),at:''});
-state.document.core.data.threads[0].head='n34';state.document.core.data.seq=34;state.runs=[];
+state.document.core.data.threads[0].head='n34';state.document.core.data.seq=34;state.runs=[];state=await projectFixture(state);
 const browser=await chromium.launch({executablePath:'/usr/bin/chromium',headless:true,args:['--no-sandbox']});
 try{
  const page=await browser.newPage({viewport:{width:1440,height:940}});const errors=[];page.on('pageerror',e=>errors.push(e.message));

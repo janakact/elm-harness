@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="830" viewBox="0 0 1120 830" role="img" aria-labelledby="title desc">
+<title id="title">Elm harness: high-level architecture</title>
+<desc id="desc">Elm browser and terminal views connect to one authoritative Elm core. A compiled Elm plugin imports public app types and owns its own state and views. The thin Node host handles storage, model HTTP and read-only external agent processes. Codex and Claude retain their internal loops while Elm owns job state.</desc>
+<defs>
+ <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#65728a"/></marker>
+ <style>text{font-family:Inter,system-ui,sans-serif;fill:#263550;text-anchor:middle}.title{font-size:29px;font-weight:700}.heading{font-size:24px;font-weight:650}.sub{font-size:16px;fill:#637089}.label{font-size:14px;fill:#637089}.box{stroke-width:2;rx:15}.wire{fill:none;stroke:#65728a;stroke-width:2;marker-start:url(#arrow);marker-end:url(#arrow)}</style>
+</defs>
+<rect width="1120" height="830" fill="#fbfcff"/>
+<text x="560" y="49" class="title">One Elm core. Two views. Pluggable execution.</text>
+<rect x="185" y="100" width="290" height="105" class="box" fill="#eef4ff" stroke="#91a9d0"/>
+<text x="330" y="142" class="heading">Browser · Elm</text><text x="330" y="174" class="sub">HTML view + local UI state</text>
+<rect x="645" y="100" width="290" height="105" class="box" fill="#eef4ff" stroke="#91a9d0"/>
+<text x="790" y="142" class="heading">Terminal · Elm</text><text x="790" y="174" class="sub">TUI view + local UI state</text>
+<path d="M330 205 V245 H455 V290" class="wire"/>
+<path d="M790 205 V245 H665 V290" class="wire"/>
+<text x="560" y="258" class="label">actions ↓  ·  projections ↑</text>
+<rect x="360" y="290" width="400" height="155" class="box" fill="#e9f5ed" stroke="#629476"/>
+<text x="560" y="337" class="heading">Elm core</text>
+<text x="560" y="372" class="sub">App state · graph · orchestration</text>
+<text x="560" y="406" class="sub">Native agent loop + public types</text>
+<rect x="840" y="305" width="240" height="125" class="box" fill="#f3effc" stroke="#a18ac6"/>
+<text x="960" y="345" class="heading">Elm plugin</text>
+<text x="960" y="377" class="sub">Own state + views</text>
+<text x="960" y="405" class="label">imports App.Public</text>
+<path d="M760 365 H840" class="wire"/>
+<text x="801" y="343" class="label">typed API</text>
+<path d="M560 445 V510" class="wire"/>
+<text x="655" y="483" class="label">effects / events</text>
+<rect x="360" y="510" width="400" height="105" class="box" fill="#fff5e6" stroke="#c0a069"/>
+<text x="560" y="552" class="heading">Thin Node host</text>
+<text x="560" y="585" class="sub">HTTP · storage · process I/O</text>
+<rect x="50" y="525" width="230" height="75" class="box" fill="#f0f3f8" stroke="#a4b1c5"/>
+<text x="165" y="571" class="heading">Saved state</text>
+<path d="M280 562 H360" class="wire"/>
+<path d="M460 615 V675" class="wire"/>
+<path d="M660 615 V675" class="wire"/>
+<rect x="335" y="675" width="250" height="90" class="box" fill="#eef4ff" stroke="#91a9d0"/>
+<text x="460" y="713" class="heading">Model APIs</text><text x="460" y="744" class="sub">OpenRouter today</text>
+<rect x="610" y="675" width="285" height="90" class="box" fill="#fff0ed" stroke="#bc8b80"/>
+<text x="752" y="713" class="heading">Codex / Claude</text><text x="752" y="744" class="sub">Read-only jobs</text>
+<text x="560" y="805" class="label">Client transport uses Node HTTP/SSE. External agents retain their own internal loops.</text>
+</svg>
